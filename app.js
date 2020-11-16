@@ -38,6 +38,7 @@ mongoose.connect(`mongodb://localhost/${process.env.DATABASE}`, {
 //Configuración de hbs
 app.set('view engine', 'hbs')
 app.set('views', __dirname + '/views')
+hbs.registerPartials(__dirname + "/views/partials");
 
 //Configuracion del body parser
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -48,7 +49,7 @@ app.use(express.static(__dirname + '/public'))
 //Configuracion de cookies
 app.use(session({
   secret: "basic-auth-secret",
-  cookie: { maxAge: 60000 },
+  // cookie: { maxAge: 60000 },
   saveUninitialized: true,
   resave: true,
   store: new MongoStore({
@@ -61,7 +62,76 @@ app.use(session({
 
 //RUTA GET DE LA HOME PAGE
 app.get('/', (req, res, next)=>{
-  res.render('home')
+  res.render('home', {session: req.session.currentUser})
+})
+
+app.get('/log-in', (req, res, next)=>{
+  res.render('logIn')
+})
+
+app.post('/log-in', (req, res, next)=>{
+
+  const {email, password} = req.body
+
+  User.findOne({email: email})
+  .then((result)=>{
+    if(!result){
+      res.render('logIn', {errorMessage: 'Este usuario no existe. Lo sentimos.'})
+    } else {
+      bcrypt.compare(password, result.password)
+      .then((resultFromBcrypt)=>{
+        if(resultFromBcrypt){
+          req.session.currentUser = email
+          console.log(req.session)
+          res.redirect('/')
+        } else {
+          res.render('logIn', {errorMessage: 'Contraseña incorrecta. Por favor, vuelva a intentarlo.'})
+        }
+      })
+    }
+  })
+})
+
+app.get('/sign-up', (req, res, next)=>{
+  res.render('signUp')
+})
+
+app.post('/sign-up', (req, res, next)=>{
+  
+  const {email, password} = req.body
+
+  User.findOne({email: email})
+    .then((result)=>{
+      if(!result){
+        bcrypt.genSalt(10)
+        .then((salt)=>{
+          bcrypt.hash(password, salt)
+          .then((hashedPassword)=>{
+      
+            const hashedUser = {email: email, password: hashedPassword}
+      
+            User.create(hashedUser)
+            .then((result)=>{
+              res.redirect('/')
+            })
+      
+          })
+        })
+        .catch((err)=>{
+          res.send(err)
+        })
+      } else {
+        res.render('logIn', {errorMessage: 'Este usuario ya existe. ¿Querías hacer Log In?'})
+      }
+    })
+})
+
+app.use((req, res, next) => {
+  if (req.session.currentUser) { 
+    next(); 
+  } else {                          
+    res.redirect('/log-in');         
+  }                                 
 })
 
 //RUTA GET PARA RENDERIZAR EL FORMULARIO DE CREACIÓN DE UN NUEVO VIDEOJUEGO
@@ -84,8 +154,12 @@ app.post('/new-videogame', (req, res, next)=>{
   const newVideogame = {...req.body, genre: arrayGenre, platform: arrayPlatform}
 
   Videogame.create(newVideogame)
-    .then((result)=>{
-      console.log(result)
+    .then((createdVideogame)=>{
+      console.log(createdVideogame)
+      User.updateOne({email: req.session.currentUser}, {$push: {videogames: createdVideogame._id}})
+      .then((result)=>{
+        console.log(result)
+      })
       res.redirect('/all-videogames')
     })
     .catch((err)=>console.log(err))
@@ -94,28 +168,41 @@ app.post('/new-videogame', (req, res, next)=>{
 
 //RUTA GET PARA VER LA PÁGINA PERSONALIZADA DE UN VIDEOJUEGO
 app.get('/videogame/:id', (req, res, next)=>{
+
   const videogameID = req.params.id
-  
+    
   Videogame.findById(videogameID)
-  .then((result)=>{
-    res.render('singleVideogame', result)
-  })
-  .catch((err)=>{
-    console.log(err)
-    res.send(err)
-  })
+    .then((result)=>{
+      res.render('singleVideogame', result)
+    })
+    .catch((err)=>{
+      console.log(err)
+      res.send(err)
+    })    
+  
 })
 
 //RUTA GET PARA VER TODOS MIS VIDEOJUEGOS
 app.get('/all-videogames', (req, res, next)=>{
-  Videogame.find({}, {name: 1, imageUrl: 1, _id: 1}, {sort: {rating: -1}})
-    .then((videogames)=>{
+  // Videogame.find({}, {name: 1, imageUrl: 1, _id: 1}, {sort: {rating: -1}})
+  //   .then((videogames)=>{
+  //     res.render('allVideogames', {videogames})
+  //   })
+  //   .catch((err)=>{
+  //     console.log(err)
+  //     res.send(err)
+  //   })    
+
+  User.findOne({email: req.session.currentUser})
+    .populate('videogames')
+    .then((user)=>{
+      const videogames = user.videogames
       res.render('allVideogames', {videogames})
     })
     .catch((err)=>{
       console.log(err)
       res.send(err)
-    })
+    })   
 })
 
 //RUTA POST PARA ELIMINAR UN VIDEOJUEGO
@@ -145,7 +232,7 @@ app.get('/edit-videogame/:id', (req, res, next)=>{
     .catch((err)=>{
       console.log(err)
       res.send(err)
-    })
+    })    
 })
 
 //RUTA POST PARA EDITAR UN VIDEOJUEGO
@@ -164,70 +251,10 @@ app.post('/edit-videogame/:id', (req, res, next)=>{
   })
 })
 
-app.get('/sign-up', (req, res, next)=>{
-  res.render('signUp')
+app.get('/log-out', (req, res, next)=>{
+  req.session.destroy()
+  res.redirect('/')
 })
-
-app.post('/sign-up', (req, res, next)=>{
-  
-  const {email, password} = req.body
-
-  User.findOne({email: email})
-  .then((result)=>{
-    if(!result){
-      bcrypt.genSalt(10)
-      .then((salt)=>{
-        bcrypt.hash(password, salt)
-        .then((hashedPassword)=>{
-    
-          const hashedUser = {email: email, password: hashedPassword}
-    
-          User.create(hashedUser)
-          .then((result)=>{
-            res.redirect('/')
-          })
-    
-        })
-      })
-      .catch((err)=>{
-        res.send(err)
-      })
-    } else {
-      res.render('logIn', {errorMessage: 'Este usuario ya existe. ¿Querías hacer Log In?'})
-    }
-  })
-})
-
-app.get('/log-in', (req, res, next)=>{
-  res.render('logIn')
-})
-
-app.post('/log-in', (req, res, next)=>{
-
-  const {email, password} = req.body
-
-  User.findOne({email: email})
-  .then((result)=>{
-    if(!result){
-      res.render('logIn', {errorMessage: 'Este usuario no existe. Lo sentimos.'})
-    } else {
-      bcrypt.compare(password, result.password)
-      .then((resultFromBcrypt)=>{
-        if(resultFromBcrypt){
-          req.session.currentUser = email
-          console.log(req.session)
-          res.redirect('/')
-          // req.session.destroy
-        } else {
-          res.render('logIn', {errorMessage: 'Contraseña incorrecta. Por favor, vuelva a intentarlo.'})
-        }
-      })
-    }
-  })
-})
-
-
-
 
 
 
